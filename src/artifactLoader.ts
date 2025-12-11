@@ -19,9 +19,22 @@ const PARAMS_FILE_NAME = "params.json";
 export async function loadSpanParametersFromArtifact(
   artifactName: string = DEFAULT_ARTIFACT_NAME,
 ): Promise<SpanParameters | null> {
-  const client = artifact.default;
-
   try {
+    // First, check if params are available locally (from emit-params action in same workflow)
+    // The emit-params action creates files in otel-span-params/ directory
+    const localParamsPath = path.join(process.cwd(), "otel-span-params", PARAMS_FILE_NAME);
+    if (fs.existsSync(localParamsPath)) {
+      core.info("Found local span parameters file (same workflow run)");
+      const content = fs.readFileSync(localParamsPath, "utf-8");
+      const params = JSON.parse(content) as SpanParameters;
+      core.info("Loaded span parameters from local file");
+      core.debug(`Span parameters: ${JSON.stringify(params)}`);
+      return params;
+    }
+
+    // If not found locally, try downloading from artifact (for workflow_run events)
+    const client = artifact.default;
+
     // Create a temporary directory for the download
     const downloadPath = path.join(process.cwd(), ".otel-span-params-download");
     if (!fs.existsSync(downloadPath)) {

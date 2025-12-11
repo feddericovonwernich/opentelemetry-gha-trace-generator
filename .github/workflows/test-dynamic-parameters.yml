@@ -91,13 +91,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: otel-span-parameters
-          path: downloaded-params
+          path: otel-span-params
 
       - name: Validate artifact contents
         run: |
           echo "Validating artifact was uploaded correctly..."
 
-          if [ ! -f downloaded-params/params.json ]; then
+          if [ ! -f otel-span-params/params.json ]; then
             echo "❌ params.json not found in artifact"
             exit 1
           fi
@@ -105,12 +105,12 @@ jobs:
           echo "✅ Artifact downloaded successfully"
           echo ""
           echo "Artifact contents:"
-          cat downloaded-params/params.json | jq .
+          cat otel-span-params/params.json | jq .
 
           # Validate structure
-          WORKFLOW_PARAMS=$(cat downloaded-params/params.json | jq '.workflow')
-          JOB_PARAMS=$(cat downloaded-params/params.json | jq '.job')
-          STEP_PARAMS=$(cat downloaded-params/params.json | jq '.steps')
+          WORKFLOW_PARAMS=$(cat otel-span-params/params.json | jq '.workflow')
+          JOB_PARAMS=$(cat otel-span-params/params.json | jq '.job')
+          STEP_PARAMS=$(cat otel-span-params/params.json | jq '.steps')
 
           if [ "$WORKFLOW_PARAMS" == "null" ] || [ "$JOB_PARAMS" == "null" ] || [ "$STEP_PARAMS" == "null" ]; then
             echo "❌ Invalid artifact structure"
