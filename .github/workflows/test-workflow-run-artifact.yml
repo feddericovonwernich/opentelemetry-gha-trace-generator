@@ -1,0 +1,168 @@
+name: "Test workflow_run Artifact Download"
+
+on:
+  workflow_run:
+    workflows: ["Test Dynamic Span Parameters"]
+    types:
+      - completed
+
+jobs:
+  # This job tests the artifact API download functionality
+  # It runs after the test-dynamic-parameters workflow completes
+  # and validates that we can download artifacts from a completed workflow
+  test-artifact-download:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build action
+        run: npm run build
+
+      - name: Export trace from completed workflow
+        id: export
+        uses: ./
+        with:
+          otlpEndpoint: "console"
+          otlpHeaders: "test=true"
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          runId: ${{ github.event.workflow_run.id }}
+          spanParamsArtifact: "otel-span-parameters"
+          parseLogParameters: "false"
+        env:
+          OTEL_CONSOLE_ONLY: "true"
+
+      - name: Validate trace was exported
+        run: |
+          if [ -z "${{ steps.export.outputs.traceId }}" ]; then
+            echo "❌ Trace ID was not generated"
+            exit 1
+          fi
+
+          echo "✅ Trace exported successfully from workflow_run event"
+          echo "Trace ID: ${{ steps.export.outputs.traceId }}"
+          echo "Source workflow run: ${{ github.event.workflow_run.id }}"
+          echo ""
+          echo "This test validates that:"
+          echo "  1. The action can run in workflow_run context"
+          echo "  2. Artifacts can be downloaded from completed workflows"
+          echo "  3. The artifact API download path works correctly"
+          echo ""
+          echo "Note: Parameters from the source workflow's emit-params action"
+          echo "should be included in the trace output above."
+
+  # This job tests downloading artifacts using the artifact API directly
+  test-artifact-api-download:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Test artifact loader directly
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const artifact = require('@actions/artifact');
+            const fs = require('fs');
+            const path = require('path');
+
+            try {
+              const client = artifact.default;
+
+              console.log('Looking for otel-span-parameters artifact...');
+              const getResponse = await client.getArtifact('otel-span-parameters', {
+                findBy: {
+                  repositoryOwner: context.repo.owner,
+                  repositoryName: context.repo.repo,
+                  workflowRunId: context.payload.workflow_run.id
+                }
+              });
+
+              console.log(`Found artifact: ${getResponse.artifact.name} (ID: ${getResponse.artifact.id})`);
+
+              const downloadPath = path.join(process.cwd(), '.artifact-test-download');
+              fs.mkdirSync(downloadPath, { recursive: true });
+
+              const response = await client.downloadArtifact(getResponse.artifact.id, {
+                path: downloadPath
+              });
+
+              console.log(`Downloaded to: ${response.downloadPath}`);
+
+              const paramsFile = path.join(downloadPath, 'params.json');
+              if (fs.existsSync(paramsFile)) {
+                const content = fs.readFileSync(paramsFile, 'utf-8');
+                const params = JSON.parse(content);
+
+                console.log('✅ Successfully downloaded and parsed artifact!');
+                console.log('');
+                console.log('Artifact contents:');
+                console.log(JSON.stringify(params, null, 2));
+
+                // Validate structure
+                if (!params.workflow || !params.job || !params.steps) {
+                  core.setFailed('Invalid artifact structure');
+                  return;
+                }
+
+                const workflowKeys = Object.keys(params.workflow).length;
+                const jobKeys = Object.keys(params.job).length;
+                const stepKeys = Object.keys(params.steps).length;
+
+                console.log('');
+                console.log('Artifact validation:');
+                console.log(`  - Workflow parameters: ${workflowKeys} keys`);
+                console.log(`  - Job parameters: ${jobKeys} keys`);
+                console.log(`  - Step parameters: ${stepKeys} step entries`);
+
+                if (workflowKeys === 0 || jobKeys === 0 || stepKeys === 0) {
+                  core.setFailed('Artifact is missing expected parameters');
+                  return;
+                }
+
+                console.log('');
+                console.log('✅ Artifact API download test passed!');
+              } else {
+                core.setFailed('params.json not found in downloaded artifact');
+              }
+
+              // Cleanup
+              fs.rmSync(downloadPath, { recursive: true, force: true });
+
+            } catch (error) {
+              console.error('Error downloading artifact:', error);
+              core.setFailed(error.message);
+            }
+
+  # This job validates the complete workflow_run integration
+  validate-workflow-run-integration:
+    needs: [test-artifact-download, test-artifact-api-download]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          echo "✅ workflow_run artifact download tests completed successfully!"
+          echo ""
+          echo "Validated scenarios:"
+          echo "  1. Artifact download via action in workflow_run context"
+          echo "  2. Direct artifact API download from completed workflow"
+          echo "  3. Artifact structure and content validation"
+          echo ""
+          echo "The emit-params action and artifact-based parameter loading"
+          echo "are working correctly for workflow_run events!"
