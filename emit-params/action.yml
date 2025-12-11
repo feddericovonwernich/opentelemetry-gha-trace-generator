@@ -99,25 +99,7 @@ runs:
           --argjson kv "$KV_JSON" \
           --arg scope "$SCOPE" \
           --arg stepName "$STEP_NAME" \
-          '
-          # Merge workflow params
-          .workflow += $workflow |
-
-          # Merge job params
-          .job += $job |
-
-          # Merge step params
-          .steps[$stepName] = (.steps[$stepName] // {}) + $step |
-
-          # Add key=value params to appropriate scope
-          if $scope == "workflow" then
-            .workflow += $kv
-          elif $scope == "job" then
-            .job += $kv
-          else
-            .steps[$stepName] = (.steps[$stepName] // {}) + $kv
-          end
-          ')
+          '.workflow += $workflow | .job += $job | .steps[$stepName] = (.steps[$stepName] // {}) + $step | if $scope == "workflow" then .workflow += $kv elif $scope == "job" then .job += $kv else .steps[$stepName] = (.steps[$stepName] // {}) + $kv end')
 
         echo "$MERGED" > .otel-span-params/params.json
         echo "Updated span parameters:"
