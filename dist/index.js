@@ -31571,6 +31571,20 @@ async function listLabelsOnIssue(context, octokit, prNumber) {
         issue_number: prNumber,
     }, (response) => response.data.map((issue) => issue.name));
 }
+async function getJobLogs(context, octokit, jobId) {
+    const res = await octokit.rest.actions.downloadJobLogsForWorkflowRun({
+        ...context.repo,
+        job_id: jobId,
+    });
+    return res.data;
+}
+async function getJobsLogs(context, octokit, jobIds) {
+    const logs = {};
+    for (const jobId of jobIds) {
+        logs[jobId] = await getJobLogs(context, octokit, jobId);
+    }
+    return logs;
+}
 
 /*
  * Copyright The OpenTelemetry Authors
@@ -33922,7 +33936,77 @@ var esm$4 = /*#__PURE__*/Object.freeze({
 	trace: trace
 });
 
-async function traceStep(step) {
+// Regex patterns for each tag type
+const SPAN_PARAM_REGEX = /<span-parameter\s+key="([^"]+)"\s+value="([^"]*)"\s*\/>/g;
+const STEP_PARAM_REGEX = /<step-parameter\s+key="([^"]+)"\s+value="([^"]*)"\s*\/>/g;
+const JOB_PARAM_REGEX = /<job-parameter\s+key="([^"]+)"\s+value="([^"]*)"\s*\/>/g;
+const WORKFLOW_PARAM_REGEX = /<workflow-parameter\s+key="([^"]+)"\s+value="([^"]*)"\s*\/>/g;
+function parseStepLogs(logs) {
+    const result = {
+        stepParameters: {},
+        jobParameters: {},
+        workflowParameters: {},
+    };
+    // Parse step parameters (default + explicit)
+    for (const match of logs.matchAll(SPAN_PARAM_REGEX)) {
+        result.stepParameters[match[1]] = match[2];
+    }
+    for (const match of logs.matchAll(STEP_PARAM_REGEX)) {
+        result.stepParameters[match[1]] = match[2];
+    }
+    // Parse job parameters
+    for (const match of logs.matchAll(JOB_PARAM_REGEX)) {
+        result.jobParameters[match[1]] = match[2];
+    }
+    // Parse workflow parameters
+    for (const match of logs.matchAll(WORKFLOW_PARAM_REGEX)) {
+        result.workflowParameters[match[1]] = match[2];
+    }
+    return result;
+}
+function parseJobLogs(jobLog, steps) {
+    const stepLogs = new Map();
+    if (!jobLog || steps.length === 0) {
+        return stepLogs;
+    }
+    // GitHub job logs have step markers
+    // The format includes timestamps and step markers like:
+    // "2024-01-01T00:00:00.0000000Z ##[group]Run actions/checkout@v4"
+    // Split log into sections by step number
+    // Each step section starts with a pattern containing the step number
+    const lines = jobLog.split("\n");
+    let currentStepNumber = -1;
+    let currentStepLogs = [];
+    for (const line of lines) {
+        // Look for step start markers
+        // GitHub format: timestamp ##[group]<step info>
+        const stepMatch = line.match(/##\[group\]/);
+        if (stepMatch) {
+            // Save previous step logs if we have any
+            if (currentStepNumber >= 0 && currentStepLogs.length > 0) {
+                const stepLogText = currentStepLogs.join("\n");
+                stepLogs.set(currentStepNumber, parseStepLogs(stepLogText));
+                coreExports.debug(`Parsed ${Object.keys(stepLogs.get(currentStepNumber)?.stepParameters || {}).length} step parameters for step ${currentStepNumber}`);
+            }
+            // Find which step number this corresponds to
+            // Increment step counter (steps are sequential)
+            currentStepNumber++;
+            currentStepLogs = [line];
+        }
+        else {
+            currentStepLogs.push(line);
+        }
+    }
+    // Save the last step's logs
+    if (currentStepNumber >= 0 && currentStepLogs.length > 0) {
+        const stepLogText = currentStepLogs.join("\n");
+        stepLogs.set(currentStepNumber, parseStepLogs(stepLogText));
+        coreExports.debug(`Parsed ${Object.keys(stepLogs.get(currentStepNumber)?.stepParameters || {}).length} step parameters for step ${currentStepNumber}`);
+    }
+    return stepLogs;
+}
+
+async function traceStep(step, dynamicParams) {
     const tracer = trace.getTracer("otel-cicd-action");
     if (!step.completed_at || !step.started_at) {
         coreExports.info(`Step ${step.name} is not completed yet.`);
@@ -33934,7 +34018,10 @@ async function traceStep(step) {
     }
     const startTime = new Date(step.started_at);
     const completedTime = new Date(step.completed_at);
-    const attributes = stepToAttributes(step);
+    const attributes = {
+        ...stepToAttributes(step),
+        ...dynamicParams,
+    };
     await tracer.startActiveSpan(step.name, { attributes, startTime }, async (span) => {
         const code = step.conclusion === "failure" ? SpanStatusCode.ERROR : SpanStatusCode.OK;
         span.setStatus({ code });
@@ -33954,11 +34041,11 @@ function stepToAttributes(step) {
     };
 }
 
-async function traceJob(job, annotations) {
+async function traceJob(job, annotations, jobLog) {
     const tracer = trace.getTracer("otel-cicd-action");
     if (!job.completed_at) {
         coreExports.info(`Job ${job.id} is not completed yet`);
-        return;
+        return {};
     }
     const startTime = new Date(job.started_at);
     const completedTime = new Date(job.completed_at);
@@ -33966,15 +34053,30 @@ async function traceJob(job, annotations) {
         ...jobToAttributes(job),
         ...annotationsToAttributes(annotations),
     };
+    // Parse job logs and split by step
+    const stepLogsParsed = parseJobLogs(jobLog || "", job.steps || []);
+    // Collector for job-level and workflow-level parameters
+    const jobParams = {};
+    const workflowParams = {};
     await tracer.startActiveSpan(job.name, { attributes, startTime }, async (span) => {
         const code = job.conclusion === "failure" ? SpanStatusCode.ERROR : SpanStatusCode.OK;
         span.setStatus({ code });
         for (const step of job.steps ?? []) {
-            await traceStep(step);
+            const parsed = stepLogsParsed.get(step.number);
+            if (parsed) {
+                Object.assign(jobParams, parsed.jobParameters);
+                Object.assign(workflowParams, parsed.workflowParameters);
+            }
+            await traceStep(step, parsed?.stepParameters);
+        }
+        // Apply job-level parameters
+        for (const [key, value] of Object.entries(jobParams)) {
+            span.setAttribute(key, value);
         }
         // Some skipped and post jobs return completed_at dates that are older than started_at
         span.end(new Date(Math.max(startTime.getTime(), completedTime.getTime())));
     });
+    return workflowParams;
 }
 function jobToAttributes(job) {
     // Heuristic for task type
@@ -34032,7 +34134,7 @@ function annotationsToAttributes(annotations) {
     return attributes;
 }
 
-async function traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels) {
+async function traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels, jobLogs) {
     const tracer = trace.getTracer("otel-cicd-action");
     const startTime = new Date(workflowRun.run_started_at ?? workflowRun.created_at);
     const attributes = workflowRunToAttributes(workflowRun, prLabels);
@@ -34045,8 +34147,15 @@ async function traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels) {
             const queuedSpan = tracer.startSpan("Queued", { startTime }, context.active());
             queuedSpan.end(new Date(jobs[0].started_at));
         }
+        // Collector for workflow-level parameters from all jobs/steps
+        const workflowParams = {};
         for (const job of jobs) {
-            await traceJob(job, jobAnnotations[job.id]);
+            const jobWorkflowParams = await traceJob(job, jobAnnotations[job.id], jobLogs[job.id] || "");
+            Object.assign(workflowParams, jobWorkflowParams);
+        }
+        // Apply workflow-level parameters collected from all jobs
+        for (const [key, value] of Object.entries(workflowParams)) {
+            rootSpan.setAttribute(key, value);
         }
         rootSpan.end(new Date(workflowRun.updated_at));
         return rootSpan.spanContext().traceId;
@@ -84254,6 +84363,23 @@ async function fetchGithub(token, runId) {
     }
     return { workflowRun, jobs, jobAnnotations, prLabels };
 }
+async function fetchJobLogs(token, jobsId) {
+    const octokit = githubExports.getOctokit(token);
+    coreExports.info("Get job logs");
+    let jobLogs = {};
+    try {
+        jobLogs = await getJobsLogs(githubExports.context, octokit, jobsId);
+    }
+    catch (error) {
+        if (error instanceof RequestError) {
+            coreExports.info(`Failed to get job logs: ${error.message}`);
+        }
+        else {
+            throw error;
+        }
+    }
+    return jobLogs;
+}
 async function run() {
     try {
         const otlpEndpoint = coreExports.getInput("otlpEndpoint");
@@ -84261,9 +84387,15 @@ async function run() {
         const otelServiceName = coreExports.getInput("otelServiceName") || process.env["OTEL_SERVICE_NAME"] || "";
         const runId = Number.parseInt(coreExports.getInput("runId") || `${githubExports.context.runId}`);
         const extraAttributes = stringToRecord(coreExports.getInput("extraAttributes"));
+        const parseLogParameters = coreExports.getInput("parseLogParameters") !== "false";
         const ghToken = coreExports.getInput("githubToken") || process.env["GITHUB_TOKEN"] || "";
         coreExports.info("Use Github API to fetch workflow data");
         const { workflowRun, jobs, jobAnnotations, prLabels } = await fetchGithub(ghToken, runId);
+        let jobLogs = {};
+        if (parseLogParameters) {
+            const jobsId = (jobs ?? []).map((job) => job.id);
+            jobLogs = await fetchJobLogs(ghToken, jobsId);
+        }
         coreExports.info(`Create tracer provider for ${otlpEndpoint}`);
         const attributes = {
             [ATTR_SERVICE_NAME]: otelServiceName || workflowRun.name || `${workflowRun.workflow_id}`,
@@ -84279,7 +84411,7 @@ async function run() {
         };
         const provider = createTracerProvider(otlpEndpoint, otlpHeaders, attributes);
         coreExports.info(`Trace workflow run for ${runId} and export to ${otlpEndpoint}`);
-        const traceId = await traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels);
+        const traceId = await traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels, jobLogs);
         coreExports.setOutput("traceId", traceId);
         coreExports.info(`traceId: ${traceId}`);
         coreExports.info("Flush and shutdown tracer provider");

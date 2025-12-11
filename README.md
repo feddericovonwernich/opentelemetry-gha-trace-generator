@@ -110,6 +110,103 @@ Attributes are splitted on `,` and then each key/value are splitted on the first
     extraAttributes: "extra.attribute=1,key2=value2"
 ```
 
+### Dynamic Span Parameters
+
+You can add custom attributes to specific spans by printing special tags in your workflow steps. This allows you to add metrics, custom data, or any contextual information to your traces dynamically at runtime.
+
+#### Step-level parameters
+
+Add attributes to individual step spans:
+
+```yaml
+- name: Build application
+  run: |
+    npm run build
+    BUILD_SIZE=$(du -sh dist | cut -f1)
+    echo "<span-parameter key=\"build.size\" value=\"$BUILD_SIZE\"/>"
+    echo "<span-parameter key=\"build.timestamp\" value=\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"/>"
+```
+
+#### Job-level parameters
+
+Add attributes that apply to the entire job span:
+
+```yaml
+- name: Run tests
+  run: |
+    npm test
+    TEST_COUNT=$(grep -c "test(" test/*.js || echo "0")
+    echo "<job-parameter key=\"test.total_count\" value=\"$TEST_COUNT\"/>"
+```
+
+#### Workflow-level parameters
+
+Add attributes that apply to the root workflow span:
+
+```yaml
+- name: Set version
+  run: |
+    VERSION=$(cat package.json | jq -r .version)
+    echo "<workflow-parameter key=\"app.version\" value=\"$VERSION\"/>"
+    echo "<workflow-parameter key=\"deployment.environment\" value=\"production\"/>"
+```
+
+#### Complete example
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          npm run build
+          echo "<span-parameter key=\"build.duration\" value=\"42s\"/>"
+          echo "<job-parameter key=\"job.artifacts_count\" value=\"3\"/>"
+          echo "<workflow-parameter key=\"release.version\" value=\"1.2.3\"/>"
+
+      - name: Test
+        run: |
+          npm test
+          echo "<span-parameter key=\"test.passed\" value=\"150\"/>"
+          echo "<span-parameter key=\"test.failed\" value=\"0\"/>"
+
+  export-trace:
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: corentinmusard/otel-cicd-action@v2
+        with:
+          otlpEndpoint: ${{ secrets.OTLP_ENDPOINT }}
+          otlpHeaders: ${{ secrets.OTLP_HEADERS }}
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+```
+
+#### Tag formats
+
+- `<span-parameter key="name" value="value"/>` - Step span (default)
+- `<step-parameter key="name" value="value"/>` - Step span (explicit)
+- `<job-parameter key="name" value="value"/>` - Job span
+- `<workflow-parameter key="name" value="value"/>` - Workflow span
+
+Parameters bubble up to their target span and appear as attributes in your observability platform.
+
+#### Disabling log parsing
+
+If you don't need dynamic parameters or want to optimize performance, you can disable log parsing:
+
+```yaml
+- uses: corentinmusard/otel-cicd-action@v2
+  with:
+    otlpEndpoint: ${{ secrets.OTLP_ENDPOINT }}
+    otlpHeaders: ${{ secrets.OTLP_HEADERS }}
+    githubToken: ${{ secrets.GITHUB_TOKEN }}
+    parseLogParameters: "false"
+```
+
 ### Action Inputs
 
 | name            | description                                                                                                 | required | default                               | example                                                          |
@@ -120,6 +217,7 @@ Attributes are splitted on `,` and then each key/value are splitted on the first
 | githubToken     | The repository token with Workflow permissions. Required for private repos                                  | false    |                                       | `${{ secrets.GITHUB_TOKEN }}`                                    |
 | runId           | Workflow Run ID to Export                                                                                   | false    | env.GITHUB_RUN_ID                     | `${{ github.event.workflow_run.id }}`                            |
 | extraAttributes | Extra resource attributes to add to each span | false |  | extra.attribute=1,key2=value2 |
+| parseLogParameters | Enable parsing span parameters from job logs | false | true | false |
 
 ### Action Outputs
 

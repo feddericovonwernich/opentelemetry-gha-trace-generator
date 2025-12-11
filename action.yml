@@ -26,6 +26,10 @@ inputs:
   extraAttributes:
     description: Extra resource attributes to add to each span
     required: false
+  parseLogParameters:
+    description: Enable parsing span parameters from job logs
+    required: false
+    default: "true"
 outputs:
   traceId:
     description: The OpenTelemetry Trace ID of the root span

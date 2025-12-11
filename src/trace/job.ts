@@ -10,14 +10,19 @@ import {
   CICD_PIPELINE_TASK_TYPE_VALUE_DEPLOY,
   CICD_PIPELINE_TASK_TYPE_VALUE_TEST,
 } from "@opentelemetry/semantic-conventions/incubating";
+import { parseJobLogs } from "../logParser";
 import { traceStep } from "./step";
 
-async function traceJob(job: components["schemas"]["job"], annotations?: components["schemas"]["check-annotation"][]) {
+async function traceJob(
+  job: components["schemas"]["job"],
+  annotations?: components["schemas"]["check-annotation"][],
+  jobLog?: string,
+): Promise<Record<string, string>> {
   const tracer = trace.getTracer("otel-cicd-action");
 
   if (!job.completed_at) {
     core.info(`Job ${job.id} is not completed yet`);
-    return;
+    return {};
   }
 
   const startTime = new Date(job.started_at);
@@ -27,17 +32,36 @@ async function traceJob(job: components["schemas"]["job"], annotations?: compone
     ...annotationsToAttributes(annotations),
   };
 
+  // Parse job logs and split by step
+  const stepLogsParsed = parseJobLogs(jobLog || "", job.steps || []);
+
+  // Collector for job-level and workflow-level parameters
+  const jobParams: Record<string, string> = {};
+  const workflowParams: Record<string, string> = {};
+
   await tracer.startActiveSpan(job.name, { attributes, startTime }, async (span) => {
     const code = job.conclusion === "failure" ? SpanStatusCode.ERROR : SpanStatusCode.OK;
     span.setStatus({ code });
 
     for (const step of job.steps ?? []) {
-      await traceStep(step);
+      const parsed = stepLogsParsed.get(step.number);
+      if (parsed) {
+        Object.assign(jobParams, parsed.jobParameters);
+        Object.assign(workflowParams, parsed.workflowParameters);
+      }
+      await traceStep(step, parsed?.stepParameters);
+    }
+
+    // Apply job-level parameters
+    for (const [key, value] of Object.entries(jobParams)) {
+      span.setAttribute(key, value);
     }
 
     // Some skipped and post jobs return completed_at dates that are older than started_at
     span.end(new Date(Math.max(startTime.getTime(), completedTime.getTime())));
   });
+
+  return workflowParams;
 }
 
 function jobToAttributes(job: components["schemas"]["job"]): Attributes {

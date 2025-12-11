@@ -46,6 +46,8 @@ describe("run", () => {
           return token;
         case "extraAttributes":
           return "extra.attribute=1,key2=value2";
+        case "parseLogParameters":
+          return "false";
         default:
           return "";
       }

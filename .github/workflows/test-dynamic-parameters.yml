@@ -1,0 +1,154 @@
+name: "Test Dynamic Span Parameters"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-job:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup test environment
+        run: |
+          echo "Setting up test environment"
+          echo "<step-parameter key=\"setup.duration\" value=\"1s\"/>"
+          echo "<job-parameter key=\"job.test_type\" value=\"integration\"/>"
+          echo "<workflow-parameter key=\"workflow.test_run\" value=\"true\"/>"
+
+      - name: Build with metrics
+        run: |
+          echo "Building application..."
+          sleep 2
+          echo "<span-parameter key=\"build.duration\" value=\"2s\"/>"
+          echo "<span-parameter key=\"build.status\" value=\"success\"/>"
+          BUILD_SIZE="1.2MB"
+          echo "<span-parameter key=\"build.size\" value=\"$BUILD_SIZE\"/>"
+          echo "<job-parameter key=\"job.artifacts_count\" value=\"3\"/>"
+
+      - name: Run tests with metrics
+        run: |
+          echo "Running tests..."
+          TEST_COUNT=150
+          echo "<span-parameter key=\"test.total\" value=\"$TEST_COUNT\"/>"
+          echo "<span-parameter key=\"test.passed\" value=\"148\"/>"
+          echo "<span-parameter key=\"test.failed\" value=\"2\"/>"
+          echo "<job-parameter key=\"job.coverage\" value=\"92.5\"/>"
+          echo "<workflow-parameter key=\"workflow.quality_gate\" value=\"passed\"/>"
+
+      - name: Deploy (workflow-level parameter)
+        run: |
+          VERSION="1.2.3-test"
+          echo "Deploying version $VERSION"
+          echo "<workflow-parameter key=\"deployment.version\" value=\"$VERSION\"/>"
+          echo "<workflow-parameter key=\"deployment.environment\" value=\"test\"/>"
+          echo "<span-parameter key=\"deploy.time\" value=\"5s\"/>"
+
+  export-and-validate:
+    needs: [test-job]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build action
+        run: npm run build
+
+      - name: Export trace with log parsing enabled
+        id: export
+        uses: ./
+        with:
+          otlpEndpoint: "console"
+          otlpHeaders: "test=true"
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          parseLogParameters: "true"
+        env:
+          OTEL_CONSOLE_ONLY: "true"
+
+      - name: Validate trace export succeeded
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const traceId = '${{ steps.export.outputs.traceId }}';
+            console.log('Trace ID:', traceId);
+
+            if (!traceId || traceId.length === 0) {
+              core.setFailed('Trace ID was not generated');
+              return;
+            }
+
+            console.log('✅ Trace export completed successfully');
+            console.log('');
+            console.log('Expected dynamic parameters in trace:');
+            console.log('  Step-level parameters:');
+            console.log('    - setup.duration, build.duration, build.status, build.size');
+            console.log('    - test.total, test.passed, test.failed');
+            console.log('    - deploy.time');
+            console.log('  Job-level parameters:');
+            console.log('    - job.test_type, job.artifacts_count, job.coverage');
+            console.log('  Workflow-level parameters:');
+            console.log('    - workflow.test_run, workflow.quality_gate');
+            console.log('    - deployment.version, deployment.environment');
+            console.log('');
+            console.log('💡 To verify the dynamic parameters were captured:');
+            console.log('1. Check the "Export trace with log parsing enabled" step logs above');
+            console.log('2. Look for span attributes in the console output');
+            console.log('3. Verify custom parameters appear alongside standard GitHub attributes');
+            console.log('4. The trace shows a hierarchy: Workflow → Job → Steps');
+            console.log('5. Each level should have its corresponding dynamic parameters');
+
+  test-disabled-parsing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Step with parameters (should be ignored)
+        run: |
+          echo "This parameter should be ignored"
+          echo "<span-parameter key=\"ignored.param\" value=\"should_not_appear\"/>"
+
+  export-disabled:
+    needs: [test-disabled-parsing]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build action
+        run: npm run build
+
+      - name: Export trace with log parsing disabled
+        id: export
+        uses: ./
+        with:
+          otlpEndpoint: "console"
+          otlpHeaders: "test=true"
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          parseLogParameters: "false"
+        env:
+          OTEL_CONSOLE_ONLY: "true"
+
+      - name: Validate disabled parsing
+        run: |
+          echo "Trace ID: ${{ steps.export.outputs.traceId }}"
+          echo "✅ Log parsing disabled test completed"
+          echo "Parameters should NOT be parsed when parseLogParameters is false"

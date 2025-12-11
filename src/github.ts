@@ -57,4 +57,21 @@ async function listLabelsOnIssue(context: Context, octokit: Octokit, prNumber: n
   );
 }
 
-export { getWorkflowRun, listJobsForWorkflowRun, getJobsAnnotations, getPRsLabels, type Octokit };
+async function getJobLogs(context: Context, octokit: Octokit, jobId: number) {
+  const res = await octokit.rest.actions.downloadJobLogsForWorkflowRun({
+    ...context.repo,
+    job_id: jobId,
+  });
+  return res.data as string;
+}
+
+async function getJobsLogs(context: Context, octokit: Octokit, jobIds: number[]) {
+  const logs: Record<number, string> = {};
+
+  for (const jobId of jobIds) {
+    logs[jobId] = await getJobLogs(context, octokit, jobId);
+  }
+  return logs;
+}
+
+export { getWorkflowRun, listJobsForWorkflowRun, getJobsAnnotations, getPRsLabels, getJobsLogs, type Octokit };

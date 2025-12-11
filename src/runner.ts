@@ -4,7 +4,7 @@ import { RequestError } from "@octokit/request-error";
 import type { ResourceAttributes } from "@opentelemetry/resources";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { ATTR_SERVICE_INSTANCE_ID, ATTR_SERVICE_NAMESPACE } from "@opentelemetry/semantic-conventions/incubating";
-import { getJobsAnnotations, getPRsLabels, getWorkflowRun, listJobsForWorkflowRun } from "./github";
+import { getJobsAnnotations, getJobsLogs, getPRsLabels, getWorkflowRun, listJobsForWorkflowRun } from "./github";
 import { traceWorkflowRun } from "./trace/workflow";
 import { createTracerProvider, stringToRecord } from "./tracer";
 
@@ -46,6 +46,24 @@ async function fetchGithub(token: string, runId: number) {
   return { workflowRun, jobs, jobAnnotations, prLabels };
 }
 
+async function fetchJobLogs(token: string, jobsId: number[]) {
+  const octokit = getOctokit(token);
+
+  core.info("Get job logs");
+  let jobLogs: Record<number, string> = {};
+  try {
+    jobLogs = await getJobsLogs(context, octokit, jobsId);
+  } catch (error) {
+    if (error instanceof RequestError) {
+      core.info(`Failed to get job logs: ${error.message}`);
+    } else {
+      throw error;
+    }
+  }
+
+  return jobLogs;
+}
+
 async function run() {
   try {
     const otlpEndpoint = core.getInput("otlpEndpoint");
@@ -53,10 +71,17 @@ async function run() {
     const otelServiceName = core.getInput("otelServiceName") || process.env["OTEL_SERVICE_NAME"] || "";
     const runId = Number.parseInt(core.getInput("runId") || `${context.runId}`);
     const extraAttributes = stringToRecord(core.getInput("extraAttributes"));
+    const parseLogParameters = core.getInput("parseLogParameters") !== "false";
     const ghToken = core.getInput("githubToken") || process.env["GITHUB_TOKEN"] || "";
 
     core.info("Use Github API to fetch workflow data");
     const { workflowRun, jobs, jobAnnotations, prLabels } = await fetchGithub(ghToken, runId);
+
+    let jobLogs: Record<number, string> = {};
+    if (parseLogParameters) {
+      const jobsId = (jobs ?? []).map((job) => job.id);
+      jobLogs = await fetchJobLogs(ghToken, jobsId);
+    }
 
     core.info(`Create tracer provider for ${otlpEndpoint}`);
     const attributes: ResourceAttributes = {
@@ -74,7 +99,7 @@ async function run() {
     const provider = createTracerProvider(otlpEndpoint, otlpHeaders, attributes);
 
     core.info(`Trace workflow run for ${runId} and export to ${otlpEndpoint}`);
-    const traceId = await traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels);
+    const traceId = await traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels, jobLogs);
 
     core.setOutput("traceId", traceId);
     core.info(`traceId: ${traceId}`);

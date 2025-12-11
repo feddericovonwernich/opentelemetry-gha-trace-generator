@@ -8,6 +8,7 @@ async function traceWorkflowRun(
   jobs: components["schemas"]["job"][],
   jobAnnotations: Record<number, components["schemas"]["check-annotation"][]>,
   prLabels: Record<number, string[]>,
+  jobLogs: Record<number, string>,
 ) {
   const tracer = trace.getTracer("otel-cicd-action");
 
@@ -28,8 +29,17 @@ async function traceWorkflowRun(
         queuedSpan.end(new Date(jobs[0].started_at));
       }
 
+      // Collector for workflow-level parameters from all jobs/steps
+      const workflowParams: Record<string, string> = {};
+
       for (const job of jobs) {
-        await traceJob(job, jobAnnotations[job.id]);
+        const jobWorkflowParams = await traceJob(job, jobAnnotations[job.id], jobLogs[job.id] || "");
+        Object.assign(workflowParams, jobWorkflowParams);
+      }
+
+      // Apply workflow-level parameters collected from all jobs
+      for (const [key, value] of Object.entries(workflowParams)) {
+        rootSpan.setAttribute(key, value);
       }
 
       rootSpan.end(new Date(workflowRun.updated_at));
