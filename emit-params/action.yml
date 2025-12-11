@@ -120,6 +120,6 @@ runs:
       uses: actions/upload-artifact@v4
       with:
         name: ${{ inputs.artifact-name }}
-        path: .otel-span-params/
+        path: ${{ github.workspace }}/.otel-span-params/
         if-no-files-found: error
         overwrite: true
