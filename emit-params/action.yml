@@ -46,6 +46,20 @@ runs:
         STEP_NAME: ${{ inputs.step-name }}
         GITHUB_JOB_NAME: ${{ github.job }}
       run: |
+        set -e  # Exit on error
+        set -x  # Print commands for debugging
+
+        echo "Working directory: $(pwd)"
+        echo "Step params: $STEP_PARAMS"
+        echo "Job params: $JOB_PARAMS"
+        echo "Workflow params: $WORKFLOW_PARAMS"
+
+        # Check if jq is available
+        if ! command -v jq &> /dev/null; then
+          echo "Error: jq is required but not installed"
+          exit 1
+        fi
+
         mkdir -p .otel-span-params
 
         # Start with existing params or empty object
@@ -59,6 +73,8 @@ runs:
         if [ -z "$STEP_NAME" ]; then
           STEP_NAME="${GITHUB_JOB_NAME}_step_$(date +%s%N)"
         fi
+
+        echo "Step name: $STEP_NAME"
 
         # Parse key=value params into JSON
         KV_JSON='{}'
@@ -106,6 +122,9 @@ runs:
         echo "$MERGED" > .otel-span-params/params.json
         echo "Updated span parameters:"
         cat .otel-span-params/params.json | jq .
+
+        echo "Files in .otel-span-params/:"
+        ls -la .otel-span-params/
 
     - name: Upload span parameters artifact
       uses: actions/upload-artifact@v4
