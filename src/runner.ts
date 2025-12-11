@@ -89,7 +89,13 @@ async function run() {
     let artifactParams: SpanParameters | null = null;
     if (spanParamsArtifact) {
       core.info(`Loading span parameters from artifact: ${spanParamsArtifact}`);
-      artifactParams = await loadSpanParametersFromArtifact(spanParamsArtifact);
+      // Pass workflow run context for GitHub API artifact download (workflow_run events)
+      const octokit = getOctokit(ghToken);
+      const [owner, repo] =
+        context.repo.owner && context.repo.repo
+          ? [context.repo.owner, context.repo.repo]
+          : workflowRun.repository.full_name.split("/");
+      artifactParams = await loadSpanParametersFromArtifact(spanParamsArtifact, runId, octokit, owner, repo);
     }
 
     core.info(`Create tracer provider for ${otlpEndpoint}`);
