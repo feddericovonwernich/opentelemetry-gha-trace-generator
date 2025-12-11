@@ -73,7 +73,9 @@ async function run() {
     const runId = Number.parseInt(core.getInput("runId") || `${context.runId}`);
     const extraAttributes = stringToRecord(core.getInput("extraAttributes"));
     const parseLogParameters = core.getInput("parseLogParameters") !== "false";
-    const spanParamsArtifact = core.getInput("spanParamsArtifact") || "otel-span-parameters";
+    // Get spanParamsArtifact input, default only if not provided at all (not if empty string)
+    const spanParamsArtifactInput = core.getInput("spanParamsArtifact");
+    const spanParamsArtifact = spanParamsArtifactInput === "" ? "" : spanParamsArtifactInput || "otel-span-parameters";
     const ghToken = core.getInput("githubToken") || process.env["GITHUB_TOKEN"] || "";
 
     core.info("Use Github API to fetch workflow data");
