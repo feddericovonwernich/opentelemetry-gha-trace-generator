@@ -50,7 +50,8 @@ runs:
         set -x  # Print commands for debugging
 
         # Use GITHUB_WORKSPACE for consistent paths
-        PARAMS_DIR="${GITHUB_WORKSPACE}/.otel-span-params"
+        # Note: Using 'otel-span-params' instead of '.otel-span-params' to avoid hidden directory issues
+        PARAMS_DIR="${GITHUB_WORKSPACE}/otel-span-params"
         PARAMS_FILE="${PARAMS_DIR}/params.json"
 
         echo "Working directory: $(pwd)"
@@ -134,6 +135,6 @@ runs:
       uses: actions/upload-artifact@v4
       with:
         name: ${{ inputs.artifact-name }}
-        path: ${{ github.workspace }}/.otel-span-params/
+        path: ${{ github.workspace }}/otel-span-params/
         if-no-files-found: error
         overwrite: true
