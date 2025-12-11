@@ -91,7 +91,14 @@ runs:
           done <<< "$KV_PARAMS"
         fi
 
+        # Validate JSON inputs before passing to jq
+        echo "Validating JSON inputs..."
+        echo "$STEP_PARAMS" | jq . > /dev/null || { echo "Error: Invalid step JSON: $STEP_PARAMS"; exit 1; }
+        echo "$JOB_PARAMS" | jq . > /dev/null || { echo "Error: Invalid job JSON: $JOB_PARAMS"; exit 1; }
+        echo "$WORKFLOW_PARAMS" | jq . > /dev/null || { echo "Error: Invalid workflow JSON: $WORKFLOW_PARAMS"; exit 1; }
+
         # Merge parameters using jq
+        echo "Merging parameters..."
         MERGED=$(echo "$EXISTING" | jq \
           --argjson step "$STEP_PARAMS" \
           --argjson job "$JOB_PARAMS" \
@@ -99,8 +106,9 @@ runs:
           --argjson kv "$KV_JSON" \
           --arg scope "$SCOPE" \
           --arg stepName "$STEP_NAME" \
-          '.workflow += $workflow | .job += $job | .steps[$stepName] = (.steps[$stepName] // {}) + $step | if $scope == "workflow" then .workflow += $kv elif $scope == "job" then .job += $kv else .steps[$stepName] = (.steps[$stepName] // {}) + $kv end')
+          '.workflow += $workflow | .job += $job | .steps[$stepName] = (.steps[$stepName] // {}) + $step | if $scope == "workflow" then .workflow += $kv elif $scope == "job" then .job += $kv else .steps[$stepName] = (.steps[$stepName] // {}) + $kv end') || { echo "Error: jq command failed"; exit 1; }
 
+        echo "Writing to file..."
         echo "$MERGED" > .otel-span-params/params.json
         echo "Updated span parameters:"
         cat .otel-span-params/params.json | jq .
