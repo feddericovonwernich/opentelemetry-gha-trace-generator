@@ -194,6 +194,34 @@ jobs:
 
 Parameters bubble up to their target span and appear as attributes in your observability platform.
 
+#### Important notes
+
+**Timing considerations:**
+- Dynamic parameters work best when using the `workflow_run` event pattern
+- When running inside an existing workflow (as a final job), job logs may not be immediately available
+- The GitHub API sometimes returns 404 for job logs that haven't been finalized yet
+- If logs aren't available, the feature gracefully continues without parameters
+
+**Recommended usage pattern:**
+```yaml
+# Separate workflow that runs after the main workflow completes
+on:
+  workflow_run:
+    workflows: ["Main Workflow"]
+    types: [completed]
+
+jobs:
+  export-trace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: corentinmusard/otel-cicd-action@v2
+        with:
+          otlpEndpoint: ${{ secrets.OTLP_ENDPOINT }}
+          otlpHeaders: ${{ secrets.OTLP_HEADERS }}
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          runId: ${{ github.event.workflow_run.id }}
+```
+
 #### Disabling log parsing
 
 If you don't need dynamic parameters or want to optimize performance, you can disable log parsing:

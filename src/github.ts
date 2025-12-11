@@ -58,11 +58,20 @@ async function listLabelsOnIssue(context: Context, octokit: Octokit, prNumber: n
 }
 
 async function getJobLogs(context: Context, octokit: Octokit, jobId: number) {
-  const res = await octokit.rest.actions.downloadJobLogsForWorkflowRun({
-    ...context.repo,
-    job_id: jobId,
-  });
-  return res.data as string;
+  try {
+    const res = await octokit.rest.actions.downloadJobLogsForWorkflowRun({
+      ...context.repo,
+      job_id: jobId,
+    });
+    return res.data as string;
+  } catch (error) {
+    // Job logs may not be available if:
+    // 1. Job is still running or just completed
+    // 2. Logs have been deleted/expired
+    // 3. Insufficient permissions
+    // Return empty string to continue gracefully
+    return "";
+  }
 }
 
 async function getJobsLogs(context: Context, octokit: Octokit, jobIds: number[]) {

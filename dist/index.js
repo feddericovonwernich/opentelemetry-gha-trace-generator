@@ -31572,11 +31572,21 @@ async function listLabelsOnIssue(context, octokit, prNumber) {
     }, (response) => response.data.map((issue) => issue.name));
 }
 async function getJobLogs(context, octokit, jobId) {
-    const res = await octokit.rest.actions.downloadJobLogsForWorkflowRun({
-        ...context.repo,
-        job_id: jobId,
-    });
-    return res.data;
+    try {
+        const res = await octokit.rest.actions.downloadJobLogsForWorkflowRun({
+            ...context.repo,
+            job_id: jobId,
+        });
+        return res.data;
+    }
+    catch (error) {
+        // Job logs may not be available if:
+        // 1. Job is still running or just completed
+        // 2. Logs have been deleted/expired
+        // 3. Insufficient permissions
+        // Return empty string to continue gracefully
+        return "";
+    }
 }
 async function getJobsLogs(context, octokit, jobIds) {
     const logs = {};
