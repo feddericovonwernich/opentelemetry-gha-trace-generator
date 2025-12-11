@@ -13,10 +13,16 @@ import {
 import { parseJobLogs } from "../logParser";
 import { traceStep } from "./step";
 
+interface JobArtifactParams {
+  job: Record<string, string>;
+  steps: Record<string, Record<string, string>>;
+}
+
 async function traceJob(
   job: components["schemas"]["job"],
   annotations?: components["schemas"]["check-annotation"][],
   jobLog?: string,
+  artifactParams?: JobArtifactParams,
 ): Promise<Record<string, string>> {
   const tracer = trace.getTracer("otel-cicd-action");
 
@@ -49,12 +55,26 @@ async function traceJob(
         Object.assign(jobParams, parsed.jobParameters);
         Object.assign(workflowParams, parsed.workflowParameters);
       }
-      await traceStep(step, parsed?.stepParameters);
+
+      // Merge log-parsed step params with artifact step params
+      // Artifact params use step name as key, so try to find matching params
+      const logStepParams = parsed?.stepParameters || {};
+      const artifactStepParams = findArtifactStepParams(step.name, artifactParams?.steps);
+      const mergedStepParams = { ...logStepParams, ...artifactStepParams };
+
+      await traceStep(step, Object.keys(mergedStepParams).length > 0 ? mergedStepParams : undefined);
     }
 
-    // Apply job-level parameters
+    // Apply job-level parameters from logs
     for (const [key, value] of Object.entries(jobParams)) {
       span.setAttribute(key, value);
+    }
+
+    // Apply job-level parameters from artifact (these take precedence)
+    if (artifactParams?.job) {
+      for (const [key, value] of Object.entries(artifactParams.job)) {
+        span.setAttribute(key, value);
+      }
     }
 
     // Some skipped and post jobs return completed_at dates that are older than started_at
@@ -121,6 +141,32 @@ function annotationsToAttributes(annotations: components["schemas"]["check-annot
   }
 
   return attributes;
+}
+
+/**
+ * Find artifact step params that match the step name.
+ * Since artifact step keys can include job name prefixes or timestamps,
+ * we look for partial matches.
+ */
+function findArtifactStepParams(
+  stepName: string,
+  artifactSteps?: Record<string, Record<string, string>>,
+): Record<string, string> {
+  if (!artifactSteps) {
+    return {};
+  }
+
+  const result: Record<string, string> = {};
+
+  for (const [key, params] of Object.entries(artifactSteps)) {
+    // Check if the artifact step key contains the step name (partial match)
+    // or if the step name contains the artifact key
+    if (key.includes(stepName) || stepName.includes(key)) {
+      Object.assign(result, params);
+    }
+  }
+
+  return result;
 }
 
 export { traceJob };

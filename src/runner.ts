@@ -4,6 +4,7 @@ import { RequestError } from "@octokit/request-error";
 import type { ResourceAttributes } from "@opentelemetry/resources";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { ATTR_SERVICE_INSTANCE_ID, ATTR_SERVICE_NAMESPACE } from "@opentelemetry/semantic-conventions/incubating";
+import { type SpanParameters, loadSpanParametersFromArtifact } from "./artifactLoader";
 import { getJobsAnnotations, getJobsLogs, getPRsLabels, getWorkflowRun, listJobsForWorkflowRun } from "./github";
 import { traceWorkflowRun } from "./trace/workflow";
 import { createTracerProvider, stringToRecord } from "./tracer";
@@ -72,6 +73,7 @@ async function run() {
     const runId = Number.parseInt(core.getInput("runId") || `${context.runId}`);
     const extraAttributes = stringToRecord(core.getInput("extraAttributes"));
     const parseLogParameters = core.getInput("parseLogParameters") !== "false";
+    const spanParamsArtifact = core.getInput("spanParamsArtifact") || "otel-span-parameters";
     const ghToken = core.getInput("githubToken") || process.env["GITHUB_TOKEN"] || "";
 
     core.info("Use Github API to fetch workflow data");
@@ -81,6 +83,13 @@ async function run() {
     if (parseLogParameters) {
       const jobsId = (jobs ?? []).map((job) => job.id);
       jobLogs = await fetchJobLogs(ghToken, jobsId);
+    }
+
+    // Load span parameters from artifact (if available)
+    let artifactParams: SpanParameters | null = null;
+    if (spanParamsArtifact) {
+      core.info(`Loading span parameters from artifact: ${spanParamsArtifact}`);
+      artifactParams = await loadSpanParametersFromArtifact(spanParamsArtifact);
     }
 
     core.info(`Create tracer provider for ${otlpEndpoint}`);
@@ -99,7 +108,7 @@ async function run() {
     const provider = createTracerProvider(otlpEndpoint, otlpHeaders, attributes);
 
     core.info(`Trace workflow run for ${runId} and export to ${otlpEndpoint}`);
-    const traceId = await traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels, jobLogs);
+    const traceId = await traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels, jobLogs, artifactParams);
 
     core.setOutput("traceId", traceId);
     core.info(`traceId: ${traceId}`);

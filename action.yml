@@ -30,6 +30,10 @@ inputs:
     description: Enable parsing span parameters from job logs
     required: false
     default: "true"
+  spanParamsArtifact:
+    description: Name of the artifact containing span parameters (created by emit-params action)
+    required: false
+    default: "otel-span-parameters"
 outputs:
   traceId:
     description: The OpenTelemetry Trace ID of the root span

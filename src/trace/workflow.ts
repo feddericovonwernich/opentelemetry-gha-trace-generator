@@ -1,6 +1,7 @@
 import type { components } from "@octokit/openapi-types";
 import { type Attributes, SpanStatusCode, context, trace } from "@opentelemetry/api";
 import { ATTR_CICD_PIPELINE_NAME, ATTR_CICD_PIPELINE_RUN_ID } from "@opentelemetry/semantic-conventions/incubating";
+import type { SpanParameters } from "../artifactLoader";
 import { traceJob } from "./job";
 
 async function traceWorkflowRun(
@@ -9,6 +10,7 @@ async function traceWorkflowRun(
   jobAnnotations: Record<number, components["schemas"]["check-annotation"][]>,
   prLabels: Record<number, string[]>,
   jobLogs: Record<number, string>,
+  artifactParams?: SpanParameters | null,
 ) {
   const tracer = trace.getTracer("otel-cicd-action");
 
@@ -33,13 +35,27 @@ async function traceWorkflowRun(
       const workflowParams: Record<string, string> = {};
 
       for (const job of jobs) {
-        const jobWorkflowParams = await traceJob(job, jobAnnotations[job.id], jobLogs[job.id] || "");
+        // Get artifact params for this specific job
+        const jobArtifactParams = artifactParams
+          ? {
+              job: artifactParams.job,
+              steps: artifactParams.steps,
+            }
+          : undefined;
+        const jobWorkflowParams = await traceJob(job, jobAnnotations[job.id], jobLogs[job.id] || "", jobArtifactParams);
         Object.assign(workflowParams, jobWorkflowParams);
       }
 
       // Apply workflow-level parameters collected from all jobs
       for (const [key, value] of Object.entries(workflowParams)) {
         rootSpan.setAttribute(key, value);
+      }
+
+      // Apply artifact workflow-level parameters (these take precedence)
+      if (artifactParams?.workflow) {
+        for (const [key, value] of Object.entries(artifactParams.workflow)) {
+          rootSpan.setAttribute(key, value);
+        }
       }
 
       rootSpan.end(new Date(workflowRun.updated_at));

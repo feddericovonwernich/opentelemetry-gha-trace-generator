@@ -112,9 +112,73 @@ Attributes are splitted on `,` and then each key/value are splitted on the first
 
 ### Dynamic Span Parameters
 
-You can add custom attributes to specific spans by printing special tags in your workflow steps. This allows you to add metrics, custom data, or any contextual information to your traces dynamically at runtime.
+You can add custom attributes to specific spans dynamically at runtime. There are two approaches:
 
-#### Step-level parameters
+1. **Helper Action (Recommended)** - Use the `emit-params` action for same-workflow-run support
+2. **Log Tags (Legacy)** - Print special tags in your workflow steps
+
+#### Helper Action (Recommended)
+
+The `emit-params` helper action uses artifacts to pass parameters reliably, even when the trace exporter runs in the same workflow. This is the recommended approach.
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: npm run build
+
+      # Emit parameters after steps that generate metrics
+      - uses: your-org/otel-cicd-action/emit-params@v2
+        with:
+          step: '{"build.duration": "42s", "build.status": "success"}'
+          job: '{"job.artifacts_count": "3"}'
+          workflow: '{"release.version": "1.2.3"}'
+
+      - name: Test
+        run: npm test
+
+      # Key-value syntax is also supported
+      - uses: your-org/otel-cicd-action/emit-params@v2
+        with:
+          params: |
+            test.passed=150
+            test.failed=0
+          scope: step
+
+  export-trace:
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: your-org/otel-cicd-action@v2
+        with:
+          otlpEndpoint: ${{ secrets.OTLP_ENDPOINT }}
+          otlpHeaders: ${{ secrets.OTLP_HEADERS }}
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          # Automatically picks up parameters from emit-params action
+```
+
+##### emit-params Action Inputs
+
+| Input | Description | Required | Default |
+|-------|-------------|----------|---------|
+| step | JSON object of step-level parameters | false | {} |
+| job | JSON object of job-level parameters | false | {} |
+| workflow | JSON object of workflow-level parameters | false | {} |
+| params | Key=value parameters (one per line) | false | |
+| scope | Default scope for key=value params (step, job, workflow) | false | step |
+| step-name | Step name for step-level params | false | auto-detected |
+| artifact-name | Artifact name for span parameters | false | otel-span-parameters |
+
+#### Log Tags (Legacy)
+
+You can also add custom attributes by printing special tags in your workflow steps. Note that this approach has timing limitations when running within the same workflow.
+
+##### Step-level parameters
 
 Add attributes to individual step spans:
 
@@ -246,6 +310,7 @@ If you don't need dynamic parameters or want to optimize performance, you can di
 | runId           | Workflow Run ID to Export                                                                                   | false    | env.GITHUB_RUN_ID                     | `${{ github.event.workflow_run.id }}`                            |
 | extraAttributes | Extra resource attributes to add to each span | false |  | extra.attribute=1,key2=value2 |
 | parseLogParameters | Enable parsing span parameters from job logs | false | true | false |
+| spanParamsArtifact | Name of artifact containing span parameters (from emit-params action) | false | otel-span-parameters | custom-artifact-name |
 
 ### Action Outputs
 

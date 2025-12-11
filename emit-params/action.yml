@@ -1,0 +1,116 @@
+name: 'OTEL Span Parameters'
+description: 'Emit custom parameters to OpenTelemetry spans for the otel-cicd-action'
+author: 'OpenTelemetry GHA Trace Generator'
+
+inputs:
+  step:
+    description: 'JSON object of step-level parameters'
+    required: false
+    default: '{}'
+  job:
+    description: 'JSON object of job-level parameters'
+    required: false
+    default: '{}'
+  workflow:
+    description: 'JSON object of workflow-level parameters'
+    required: false
+    default: '{}'
+  params:
+    description: 'Key=value parameters (one per line)'
+    required: false
+    default: ''
+  scope:
+    description: 'Default scope for key=value params (step, job, workflow)'
+    required: false
+    default: 'step'
+  step-name:
+    description: 'Step name for step-level params (auto-detected if not set)'
+    required: false
+    default: ''
+  artifact-name:
+    description: 'Artifact name for span parameters'
+    required: false
+    default: 'otel-span-parameters'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Emit span parameters
+      shell: bash
+      env:
+        STEP_PARAMS: ${{ inputs.step }}
+        JOB_PARAMS: ${{ inputs.job }}
+        WORKFLOW_PARAMS: ${{ inputs.workflow }}
+        KV_PARAMS: ${{ inputs.params }}
+        SCOPE: ${{ inputs.scope }}
+        STEP_NAME: ${{ inputs.step-name }}
+        GITHUB_JOB_NAME: ${{ github.job }}
+      run: |
+        mkdir -p .otel-span-params
+
+        # Start with existing params or empty object
+        if [ -f .otel-span-params/params.json ]; then
+          EXISTING=$(cat .otel-span-params/params.json)
+        else
+          EXISTING='{"workflow":{},"job":{},"steps":{}}'
+        fi
+
+        # Use step name from input or fall back to job name + timestamp for uniqueness
+        if [ -z "$STEP_NAME" ]; then
+          STEP_NAME="${GITHUB_JOB_NAME}_step_$(date +%s%N)"
+        fi
+
+        # Parse key=value params into JSON
+        KV_JSON='{}'
+        if [ -n "$KV_PARAMS" ]; then
+          while IFS= read -r line; do
+            # Skip empty lines
+            [ -z "$line" ] && continue
+            # Split on first = sign
+            key="${line%%=*}"
+            value="${line#*=}"
+            if [ -n "$key" ]; then
+              KV_JSON=$(echo "$KV_JSON" | jq --arg k "$key" --arg v "$value" '. + {($k): $v}')
+            fi
+          done <<< "$KV_PARAMS"
+        fi
+
+        # Merge parameters using jq
+        MERGED=$(echo "$EXISTING" | jq \
+          --argjson step "$STEP_PARAMS" \
+          --argjson job "$JOB_PARAMS" \
+          --argjson workflow "$WORKFLOW_PARAMS" \
+          --argjson kv "$KV_JSON" \
+          --arg scope "$SCOPE" \
+          --arg stepName "$STEP_NAME" \
+          '
+          # Merge workflow params
+          .workflow += $workflow |
+
+          # Merge job params
+          .job += $job |
+
+          # Merge step params
+          .steps[$stepName] = (.steps[$stepName] // {}) + $step |
+
+          # Add key=value params to appropriate scope
+          if $scope == "workflow" then
+            .workflow += $kv
+          elif $scope == "job" then
+            .job += $kv
+          else
+            .steps[$stepName] = (.steps[$stepName] // {}) + $kv
+          end
+          ')
+
+        echo "$MERGED" > .otel-span-params/params.json
+        echo "Updated span parameters:"
+        cat .otel-span-params/params.json | jq .
+
+    - name: Upload span parameters artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: .otel-span-params/
+        if-no-files-found: error
+        overwrite: true
