@@ -87,6 +87,61 @@ jobs:
       - name: Build action
         run: npm run build
 
+      - name: Download and validate artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: otel-span-parameters
+          path: downloaded-params
+
+      - name: Validate artifact contents
+        run: |
+          echo "Validating artifact was uploaded correctly..."
+
+          if [ ! -f downloaded-params/params.json ]; then
+            echo "❌ params.json not found in artifact"
+            exit 1
+          fi
+
+          echo "✅ Artifact downloaded successfully"
+          echo ""
+          echo "Artifact contents:"
+          cat downloaded-params/params.json | jq .
+
+          # Validate structure
+          WORKFLOW_PARAMS=$(cat downloaded-params/params.json | jq '.workflow')
+          JOB_PARAMS=$(cat downloaded-params/params.json | jq '.job')
+          STEP_PARAMS=$(cat downloaded-params/params.json | jq '.steps')
+
+          if [ "$WORKFLOW_PARAMS" == "null" ] || [ "$JOB_PARAMS" == "null" ] || [ "$STEP_PARAMS" == "null" ]; then
+            echo "❌ Invalid artifact structure"
+            exit 1
+          fi
+
+          # Check for expected workflow parameters
+          if ! echo "$WORKFLOW_PARAMS" | jq -e '.["workflow.test_run"]' > /dev/null; then
+            echo "❌ Missing workflow.test_run parameter"
+            exit 1
+          fi
+
+          # Check for expected job parameters
+          if ! echo "$JOB_PARAMS" | jq -e '.["job.test_type"]' > /dev/null; then
+            echo "❌ Missing job.test_type parameter"
+            exit 1
+          fi
+
+          # Check that steps exist
+          STEP_COUNT=$(echo "$STEP_PARAMS" | jq 'keys | length')
+          if [ "$STEP_COUNT" -lt 4 ]; then
+            echo "❌ Expected at least 4 step parameter entries, found $STEP_COUNT"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ Artifact validation passed:"
+          echo "  - Workflow parameters: $(echo "$WORKFLOW_PARAMS" | jq 'keys | length') keys"
+          echo "  - Job parameters: $(echo "$JOB_PARAMS" | jq 'keys | length') keys"
+          echo "  - Step parameters: $STEP_COUNT step entries"
+
       - name: Export trace with artifact parameters
         id: export
         uses: ./
@@ -99,7 +154,7 @@ jobs:
         env:
           OTEL_CONSOLE_ONLY: "true"
 
-      - name: Validate parameters in trace output
+      - name: Validate trace export succeeded
         run: |
           # Create expected parameters JSON
           cat > expected-params.json <<'EOF'
