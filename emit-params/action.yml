@@ -49,7 +49,13 @@ runs:
         set -e  # Exit on error
         set -x  # Print commands for debugging
 
+        # Use GITHUB_WORKSPACE for consistent paths
+        PARAMS_DIR="${GITHUB_WORKSPACE}/.otel-span-params"
+        PARAMS_FILE="${PARAMS_DIR}/params.json"
+
         echo "Working directory: $(pwd)"
+        echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+        echo "Params dir: $PARAMS_DIR"
         echo "Step params: $STEP_PARAMS"
         echo "Job params: $JOB_PARAMS"
         echo "Workflow params: $WORKFLOW_PARAMS"
@@ -60,11 +66,11 @@ runs:
           exit 1
         fi
 
-        mkdir -p .otel-span-params
+        mkdir -p "$PARAMS_DIR"
 
         # Start with existing params or empty object
-        if [ -f .otel-span-params/params.json ]; then
-          EXISTING=$(cat .otel-span-params/params.json)
+        if [ -f "$PARAMS_FILE" ]; then
+          EXISTING=$(cat "$PARAMS_FILE")
         else
           EXISTING='{"workflow":{},"job":{},"steps":{}}'
         fi
@@ -109,12 +115,20 @@ runs:
           '.workflow += $workflow | .job += $job | .steps[$stepName] = (.steps[$stepName] // {}) + $step | if $scope == "workflow" then .workflow += $kv elif $scope == "job" then .job += $kv else .steps[$stepName] = (.steps[$stepName] // {}) + $kv end') || { echo "Error: jq command failed"; exit 1; }
 
         echo "Writing to file..."
-        echo "$MERGED" > .otel-span-params/params.json
+        echo "$MERGED" > "$PARAMS_FILE"
         echo "Updated span parameters:"
-        cat .otel-span-params/params.json | jq .
+        cat "$PARAMS_FILE" | jq .
 
-        echo "Files in .otel-span-params/:"
-        ls -la .otel-span-params/
+        echo "Files in $PARAMS_DIR:"
+        ls -la "$PARAMS_DIR"
+
+        echo "Verifying file exists:"
+        if [ -f "$PARAMS_FILE" ]; then
+          echo "SUCCESS: $PARAMS_FILE exists"
+        else
+          echo "FAILURE: $PARAMS_FILE does not exist"
+          exit 1
+        fi
 
     - name: Upload span parameters artifact
       uses: actions/upload-artifact@v4
